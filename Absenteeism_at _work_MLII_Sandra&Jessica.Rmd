@@ -1,0 +1,933 @@
+---
+title: "Predicting Absenteeism at work"
+subtitle: "Machine Learning II"
+author: "Sandra Alemayehu & Jessica Hayek"
+date: "February 21, 2020"
+output:
+  rmarkdown::html_document:
+    code_folding: show
+    df_print: paged
+    fig_caption: true
+    theme: lumen
+    toc: yes
+    toc_float: yes
+    toc_collapsed: true
+    toc_depth: 4
+    number_sections: true
+    
+---
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**NOTE: THE BACKWARD STEPWISE SECTION TAKES LONG TO KNIT AND HAS BEEN EXPLUDED FROM BEING KNITTED **
+
+
+```{r Packages Needed, message=FALSE, warning=FALSE, include=FALSE}
+library(prettydoc) #For rmd theme
+library(MASS)
+library(ISLR)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ggplot2)
+library(e1071)     
+library(glmnet)
+library(caret)     
+library(FSelector)
+library(dplyr)
+library(knitr)
+library(magrittr)
+library(lattice)
+library(skimr)
+library('binr')
+library(gridExtra)
+library(devtools)
+library(party)
+library(randomForest)
+
+```
+
+# Introduction
+
+The main goal is to **predict whether or not an individual is going to have a long absence** (`Absenteeism` variable) it's therefore a binary classification problem.
+Absenteeism is when an employee has intential, repeated and prolonged absences from work. Although the causes of absenteeism are still not fully grasped by employers, its effects on productivity are understood to be great on productivity. 
+
+Through our project, we aim to help companies identify the predictors of absenteeism, which will allow a proper implementation of solutions to reduce it. As such, our problem is a classification problem with "Absenteeism" as our target variable, with "0" meaning "no absenteeism" and "1" meaning "absenteeism".
+
+# Data Loading and Overview
+
+```{r Loading Initial Training and Test Dataset}
+
+abs_trainset_df<-read.csv("C:/Users/sandr/Desktop/Machine Learning II/ML Assignment/Absenteeism_at_work_classification/Absenteeism_at_work_classification_training.csv",header = TRUE, sep = ";")
+ncol(abs_trainset_df)
+
+abs_testset_df = read.csv(file = file.path("C:/Users/sandr/Desktop/Machine Learning II/ML Assignment/Absenteeism_at_work_classification/Absenteeism_at_work_classification_test.csv"),  header = TRUE, dec = ".", sep = ";")
+```
+
+## Variable Type
+```{r Variables}
+data.frame(Variable = names(abs_trainset_df),
+           Type = sapply(abs_trainset_df, typeof),
+           Min=sapply(abs_trainset_df, min),
+           Max=sapply(abs_trainset_df, max),
+           First_values = sapply(abs_trainset_df, function(x) paste0(head(x),  collapse = ", ")),
+           row.names = NULL) %>% kable()
+```
+
+The dataframe contains **22** variables.The target variable is **Absenteeism**, a logical variable setting categorizing whether an individual is going to be absent more than 5 hours in total.
+
+## Data overview
+Lets look at the statistical summary and histogram of each variable. 
+
+```{r Training Dataset Overview, echo=FALSE}
+skim(abs_trainset_df)
+```
+
+# Data Cleaning and Preparation
+From the data overview we can identify there target variable is sufficiently balanced in training set with 63% False and 47% True. We also dont have any missing values.
+However we do have variable which are codified as numbers which are supposed to be categorical and possible outliers in few variables such as age and transportation cost.
+
+## Changing Data Type
+We can see from the attribute information (https://archive.ics.uci.edu/ml/datasets/Absenteeism+at+work) that 11 categorical variables have been codified as number in our dataframe. These variables are: **ID**, **ID.Worker**, **Reason.for.absence**, **Month.of.absence**, **Day.of.the.week**, **Seasons**, **Disciplinary.failure**, **Education**, **Social.drinker**, **Social.smoker**,**Absenteeism** 
+Before converting these these variables need to combine test dataset with train dataset, and apply the conversion on both. 
+
+```{r Combine Dataset, echo=FALSE}
+abs_testset_df$Absenteeism <- 0  #add taget variable Absenteeism into the test dataset
+abs_trainset_df$Absenteeism<-as.numeric(abs_trainset_df$Absenteeism)
+abs_dataset <- rbind(abs_trainset_df, abs_testset_df)
+str(abs_dataset) #check dataset
+```
+We can now convert all the categorical variables to factors. 
+```{r Converting Variables, echo=FALSE}
+categorical_variables <- c('ID', 'ID.Worker','Education','Reason.for.absence', 'Month.of.absence', 'Day.of.the.week', 'Seasons', 'Disciplinary.failure', 'Social.drinker', 'Social.smoker', 'Absenteeism')
+abs_dataset[categorical_variables] <- lapply(abs_dataset[categorical_variables], factor) 
+abs_trainset_df[categorical_variables] <- lapply(abs_trainset_df[categorical_variables], factor) 
+abs_testset_df[categorical_variables] <- lapply(abs_testset_df[categorical_variables], factor) 
+
+data.frame(Variable = names(abs_dataset),
+           Class = sapply(abs_dataset, class),
+           First_values = sapply(abs_dataset, function(x) paste0(head(x),  collapse = ", ")),
+           row.names = NULL) %>% kable()
+```
+
+To make attributes more discriptive we will add the actual category names of variables **Education**, **Seasons**, and **Reason for Absence**. 
+```{r Making Categorical Variables Discriptive}
+abs_dataset$Reason.for.absence <- recode(abs_dataset$Reason.for.absence, 
+                                     '0'='Infectious_parasitic_diseases',
+                                     '1'='Neoplasms',
+                                     '2'='Diseases_of_the_blood',
+                                     '3'='Endocrine_and_metabolic_diseases',
+                                     '4'='Mental_and_behavioural_disorders',
+                                     '5'='Diseases_of_the_nervous_system',
+                                     '6'='Diseases_of_the_eye_and_adnexa',
+                                     '7'='Diseases_of_the_ear_and_mastoid_process',
+                                     '8'='Diseases_of_the_circulatory_system',
+                                     '9'='Diseases_of_the_respiratory_system',
+                                     '10'='Diseases_of_the_digestive_system',
+                                     '11'='Diseases_of_the_skin_and_subcutaneous_tissue',
+                                     '12'='Diseases_of_the_musculoskeletal_system_and_connective_tissue', 
+                                     '13'='Diseases_of_the_genitourinary_system',
+                                     '14'='Pregnancy_childbirth_andthe_puerperium',
+                                     '15'='Certain_conditions_originating_in_the_perinatal',
+                                     '16'='Congenital_malformations_deformations_and_chromosomal_abnormalities',
+                                     '17'='Symptoms_signs_and_abnormal_clinica_findings',
+                                     '18'='Injury_poisoning_and_certain_other_consequences_of_external_causes',
+                                     '19'='causes_of_morbidity_and_mortality',
+                                     '21'='Factors_influencing_health_status_and_contact_with_health_services',
+                                     '22'='patient_follow-up',
+                                     '23'='medical_consultation',
+                                     '24'='blood_donation',
+                                     '25'='laboratory_examination',
+                                     '26'='unjustified_absence',
+                                     '27'='physiotherapy',
+                                     '28'='dental_consultation')
+
+abs_dataset$Seasons =recode(abs_dataset$Seasons,'1'='summer','2'='autumn','3'='winter','4'='spring')
+
+abs_dataset$Education =recode(abs_dataset$Education, '1'='highschool','2'='graduate','3'='postgraduate','4'='master&PhD')
+
+#Check dataset again
+str(abs_dataset$Seasons)
+str(abs_dataset$Education)
+str(abs_dataset$Reason.for.absence)
+str(abs_dataset$Absenteeism)
+```
+The target variable already has One Hot Encoding and we dont need to make further changes to it. 
+
+## Check for Duplicate Observations
+Our unique identifier in the dataset is the **ID** variable and we can use that to see if we have variables that have been duplicated. We do this for just the training part of the data set which is the first 593 records.
+```{r Duplicates}
+print(paste0("The total number of duplicates in our dataframe is: ", sum(duplicated(abs_dataset$ID[1:593]))))
+```
+
+## Outlier Detection and Treatment 
+
+### Outlier Detection
+
+We need to further prepare out dataset by checking for outliers in the numerical variables and identify if it is an error or an actual observation and decide how to move forward with these observations. 
+Eventhough the histogram above gives indication of which attributes might contain outliers, 1e will plot all the numerical variables we have in our dataset to make sure and see their distribute better. 
+Again we only plot the dataset for training part of out dataset.
+
+**NOTE: The training and test is not yet removed as we still need to explore correlation and decide if we are going to keep all our attributes or remove some of them. **
+```{r Boxplot I, fig.width=8}
+par(mfrow=c(1,5))
+boxplot(abs_dataset$Transportation.expense[1:593],
+main = "Transp. Expense",
+xlab = "Cost",
+ylab = "Amount",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Distance.from.Residence.to.Work[1:593],
+main = "Dist. Resi.-Work",
+xlab = "Distance",
+ylab = "KMs",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Service.time[1:593],
+main = "Service Time",
+xlab = "Serv. Time",
+ylab = "Years",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Age[1:593],
+main = "Age",
+xlab = "Age",
+ylab = "Years",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Hit.target[1:593],
+main = "Hit.target",
+xlab = "Goals",
+ylab = "% Achievment",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+```
+
+```{r Boxplots II, fig.width=9}
+par(mfrow=c(1,6))
+
+boxplot(abs_dataset$Work.load.Average.day[1:593],
+main = "Work Load",
+xlab = "Work Load",
+ylab = "Avg. Workload",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Weight[1:593],
+main = "Weight",
+xlab = "Weight",
+ylab = "Kgs",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Height[1:593],
+main = "Height",
+xlab = "Height",
+ylab = "Meters",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Body.mass.index[1:593],
+main = "BMI",
+xlab = "BMI",
+ylab = "BMI",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Son[1:593],
+main = "# of Childred",
+xlab = "# of Childred",
+ylab = "Child",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+boxplot(abs_dataset$Pet[1:593],
+main = "# of Pet",
+xlab = "# of Pet",
+ylab = "Pet",
+col = "darkcyan",
+border = "darkcyan",
+horizontal = FALSE,
+notch = TRUE
+)
+```
+
+### Treating Outliers
+
+The initial 5 boxplots show that We have a few outliers in Transport expense, service time, age, and hit.targe. Additionally there are outliers detected in work Load, height and number of pets, in the second group of boxplots. 
+
+Refering back to the overview where we see the minimum and maximum value of these variables, we can establish that there is no error in these data points and are actual observations which are deviations from the range in our dataset.
+
+Considering our obejective is to predict if an employee is going to be absent from a workplace, we want to be able to predict this is as many employees as possible. So if a value that lies outisde the range of other values in the training is justfied, the deviation is not extreme and we can expect smiliar deviations from the data outside this set, we can retain the data. 
+
+So for outlier detected in **transport expense** , we can keep this outlier as it is not extreme deviation, we expect our real world data to deviate from the range and want our model to be able to predict for such occurances. 
+
+Similarly, we will keep outliers in the **percentage of achievement of goals in the (Hit.Target)** and **work load**, as we expect to have employees that might be performing less that others or have higher work load than the rest. We want our model to predict for such kinds of employees as well. 
+
+In the case of the outliers detected in the **number of service time and age**, we can assume that there will be very limited employees that will have higher values than the range in the training set. This might be only employees that are in management position which have stayed with company for long time and we don´t expect such employees in out real world data, thus we don´t want our model to train for such unique cases. **However, we will not remove these outliers in number of service time and age, but instead will bin this variables and convert them to categorical variables as in we don't necessarly need out model to train for each unique case and we assume the category group with have simiar manner.**
+
+For outliers detected in Height, we can keep this records as they are for now as we see that there are no outliers in BMI which combines weight and height (The formula for BMI is weight in kilograms divided by height in meters squared). Accordingly expect high correlation between these values and there is not need for our model to train on weight and height if it uses BMI. And so our model will not be taking into consideration these deviated values from height. 
+
+We have three outliers in number of pets owned. Eventhough it is not necessarly an error and employees can have as much as 5 to 8 pets we don't want our distribution to be affected by such values. We want out model to only capture wether having a pet or not having a pet affects absentieseem and this further justified by the distribution of those who don't have pets and those which do.
+
+```{r OneHot Encode  - Number of Pets}
+abs_dataset$Pet_encoded<-abs_dataset$Pet
+abs_dataset$Pet_encoded[abs_dataset$Pet_encoded > 0] <- 1
+
+abs_dataset[5:15,c('Pet','Pet_encoded')]
+
+```
+
+
+```{r Exploring Workload Data, fig.width=9, fig.height=3}
+
+bar_wl_month<-ggplot(abs_dataset, aes(x = abs_dataset$Work.load.Average.day, y = abs_dataset$Month.of.absence), group = abs_dataset$Absenteeism, color = abs_dataset$Absenteeism) +labs(y="Months", x = "Average workload") +
+geom_line() + theme_bw() + theme(panel.border = element_blank()) 
+
+bar_wl_abs<-ggplot(abs_dataset, aes(x = abs_dataset$Absenteeism, y = abs_dataset$Work.load.Average.day, fill=Absenteeism)) +labs(y="Average workload", x = "Absenteeism") +
+geom_bar(stat = "summary", fun.y= "mean")+ theme_bw() + theme(panel.border = element_blank())
+
+bar_wl_dow<-ggplot(abs_dataset, aes(x = abs_dataset$Day.of.the.week, y = abs_dataset$Work.load.Average.day, fill=Day.of.the.week)) + labs(y="Average workload", x = "Day of the week") +
+geom_bar(stat = "summary", fun.y= "mean") + theme_bw() + theme(panel.border = element_blank()) 
+
+gridExtra::grid.arrange(bar_wl_abs, bar_wl_month, bar_wl_dow,ncol=3)
+
+```
+the plot above compares how work load relates to variables such as month of absence and what the average work load for those that were absent and were not. There seems to be no clear correlation as the average workload for those with long absentees and those with not is similar. And there is no trend in month of absense and average workload 
+
+
+## Advanced Factorization
+Following the handeling out outliers, further factorization through binning can be done on variables which have levels of detail that we don't need our model to train on and capture. In this dataset we will bin the variables **Age**, **Years of service**, **distance from residence to work**, and **transport cost**.
+
+To check that our binning is actually improving our model prediction we will keep the original numeric variable and we will create a new factor variable for each of these attributes. 
+
+- **Age**
+We can bin our employees into 
+    - 18 to 25 : very young employees
+    - 26 to 35 : young employees
+    - 36 to 45 : middle age employees
+    - Above 45 : old age employess
+```{r Binning Age - Bucketize}
+abs_dataset$age_bin <-.bincode(abs_dataset$Age, c(18, 25, 35,45,100))
+abs_dataset$age_bin<- recode(abs_dataset$age_bin,`1`="Very Young Employee",`2`="Young Employee",`3`="Middle Age Employee",`4`="Old Age Employee")
+abs_dataset$age_bin<-as.factor(abs_dataset$age_bin)
+abs_dataset[5:15,c('Age','age_bin')]
+```
+
+
+- **Service Time **
+We can bin our employees into  4 categories based on the quantiles, which will create bins automatically using the dataset distribution.
+```{r Binning Service time - Bucketize}
+service_time_bins<-bins.quantiles(abs_dataset$Service.time, 4, 4, verbose = FALSE)
+service_time_bins$binc
+#[1, 9] [10, 13] [14, 16] [17, 29] we will use this range to create binned variable.
+
+abs_dataset$service.time_bin <-.bincode(abs_dataset$Service.time, c(0, 10, 14,17,30),FALSE, TRUE)
+abs_dataset$service.time_bin<- recode(abs_dataset$service.time_bin,`1`="1-9 yrs",`2`="10 to 13 yrs",`3`="14 to 16 yrs",`4`="17 to 29 yrs")
+
+abs_dataset$service.time_bin<-as.factor(abs_dataset$service.time_bin)
+abs_dataset[100:105,c('Service.time','service.time_bin')] #viewing binned data
+```
+
+
+- **Distance from residence to work**, and **Transportation Expense**
+The two variables will be binned as follows:
+  Transportation Expense:
+    - 100 to 199 : Cheap
+    - 200 to 299 : Normal
+    - Above 300: Expensive
+  
+```{r Binning Transportation Expense - Bucketize}
+abs_dataset$Transportation.expense_bin <-.bincode(abs_dataset$Transportation.expense, c(100, 200, 300,2000), FALSE, TRUE)
+abs_dataset$Transportation.expense_bin<- recode(abs_dataset$Transportation.expense_bin, `1`="Cheap",`2`="Normal",`3`="Very Expensive")
+
+abs_dataset$Transportation.expense_bin<-as.factor(abs_dataset$Transportation.expense_bin)
+abs_dataset[210:215,c('Transportation.expense','Transportation.expense_bin')]
+
+
+```
+  
+Distance from residence to work : Binned as "Close", "Far" and "Very Far" through bin generated by quantile distribution. 
+```{r Binning Distance from Residence to Work}
+
+distance_bins<-bins.quantiles(abs_dataset$Distance.from.Residence.to.Work, 4, 4, verbose = FALSE)
+distance_bins$binc
+#[5, 16] [17, 26] [27, 50] [51, 52]  we will use this range to create binned variable.
+abs_dataset$Distance.Resi.to.Work_bin <-.bincode(abs_dataset$Distance.from.Residence.to.Work, c(5, 17, 27,51, 53), FALSE, TRUE)
+abs_dataset$Distance.Resi.to.Work_bin <- recode(abs_dataset$Distance.Resi.to.Work_bin,`1`="Close",`2`="Average Distance",`3`="Far",`4`="Very Far")
+abs_dataset[100:105,c('Distance.from.Residence.to.Work','Distance.Resi.to.Work_bin')] #viewing binned data
+
+```
+
+
+### Correlation Between Exlanatory Variables
+Below we explore further to check correlation between linear variables using Pearson correlation test to establish statistical evidence for taking action on handeling these attribues differently. 
+
+```{r Correlation Test - BMI with Weight and Height}
+cor.test(abs_dataset$Height, abs_dataset$Body.mass.index, method="pearson")
+cor.test(abs_dataset$Weight, abs_dataset$Body.mass.index, method="pearson")
+```
+The correlation test above using the Pearson method for both **Weight** and **Height** with **Body.mass.index** as expected resulted in values very less than the significance level alpha = 0.05.
+
+```{r Correlation Test - Transport Expense and Distance}
+cor.test(abs_dataset$Transportation.expense, abs_dataset$Distance.from.Residence.to.Work, method="pearson")
+```
+There is an obivious correlation between distance from residence to work and transportation expense and the 
+
+
+## Preparing Cleaned Train and Test
+
+```{r More Data Cleaning}
+colnames(abs_dataset)[which(names(abs_dataset) == "Son")] <- "Number_Children"
+#Renaming "Son" Attribute to more accurate name
+
+data.frame(Variable = names(abs_dataset),
+           Class = sapply(abs_dataset, class),
+           First_values = sapply(abs_dataset, function(x) paste0(head(x),  collapse = ", ")),
+           row.names = NULL) %>% kable()
+```
+**Removing Attributes**
+We will not be using some attributes for modeling such as the obvious ones as ID and ID.Worker. Additionally, considering we have BMI that takes into account weight and height we don't need our model to consider the highly correlated attributes separatly. So we will remove weight and height as well. 
+
+We will keep the other variables we have binned and converted to binary variable, to run 
+
+```{r Removing Attribues}
+
+abs_dataset$ID.Worker<- NULL
+abs_dataset$Weight<- NULL
+abs_dataset$Height<- NULL
+
+```
+
+
+### Train and Test Split
+```{r Split Train and Test - Inital}
+training1 <- abs_dataset[1:593,]  
+test1 <- abs_dataset[594:740,]
+```
+**Note: The test1 dataset is not going to be used until the file model to predict the unknow target variable."
+
+
+# Feature Selection
+
+
+### Training and Validation 
+To be able to evaluate our model we will split the training dataset into training and validation, and use the validation set as if it is a test set. This way we can compare the accuracy of our model before and after feature selection. 
+
+We will use the same proportion as the original test set that is 24% of the training set. We will make this split random. 
+We will create this for the cleaned training dataset and the original training dataset. 
+```{r Train and Validation set}
+
+initial_training_size <- floor(0.76 * nrow(abs_trainset_df))
+cleaned_training1_size<- floor(0.76 * nrow(training1))
+
+set.seed(123) #so we have the same random pick from the inital and cleaned
+train_init. <- sample(seq_len(nrow(abs_trainset_df)), size = initial_training_size)
+set.seed(123)
+train_clean. <- sample(seq_len(nrow(training1)), size = cleaned_training1_size)
+
+train_initial <- abs_trainset_df[train_init., ]
+validation_initial<- abs_trainset_df[-train_init., ] #what wasn't in training will be validation
+
+train_cleaned <- training1[train_clean., ]
+validation_cleaned<- training1[-train_clean., ]
+
+```
+
+
+## Baseline Model
+We will fit a general linear model that will be used to compare our model before and after data cleaning and feature filtering.
+
+
+```{r Initial Regression model, fig.width=9, fig.height=20 , Warning = FALSE}
+library(caret)
+train_initial$Absenteeism <- factor(train_initial$Absenteeism, levels = c("0", "1"), labels = c("Not Absent", "Absent"))
+
+validation_initial$Absenteeism <- factor(validation_initial$Absenteeism, levels = c("0", "1"), labels = c("Not Absent", "Absent"))
+
+
+
+  set.seed(123)
+  # Create a training control configuration that applies a 10-fold cross validation
+  train_control_config <- trainControl(method = "repeatedcv", 
+                                       number = 10, 
+                                       repeats = 1,
+                                       returnResamp = "all")
+  
+  # Fit a glm model to the input training data
+  initial.lm.mod <- train(Absenteeism ~ . -ID, 
+                       data = train_initial, 
+                       method = "glm", 
+                       metric = "Accuracy",
+                       preProc = c("center", "scale"),
+                       trControl=train_control_config)
+
+
+```
+
+### Baseline Model Evaluation
+We will fit a general linear model that will be used to compare our model before and after data cleaning and feature filtering.
+
+```{r Baseline Model Predition, Confusion Matrix and Important Features }
+# Predict
+initial.lm.mod.pred <- predict(initial.lm.mod, validation_initial[,-which(names(validation_initial) == "Absenteeism")])
+
+# Plot the confusion matrix
+cm_initial <- confusionMatrix(initial.lm.mod.pred, validation_initial$Absenteeism, positive = "Not Absent")
+print(cm_initial)
+# Plot the 20 most important features
+plot(varImp(initial.lm.mod),top= 20, main = "20 most important features")
+
+```
+
+## Chi-Square Test Initial
+In feature selection using Chi-Square, we will try to select from the 25 features which are highly dependent on the response. If we have small Chi-Square value it means the attribute is independent to the explained variable, which is the null hypothesis. So high Chi-Square value will indicates the reverse that the hypothesis of independence is incorrect; the variable are dependent. 
+As a result, we will try in this section to find and select variables that have high dependence with the target variable to use for modeling. 
+```{r Chi Square Variable Importance I}
+library(FSelector)
+
+weights<- data.frame(chi.squared(Absenteeism~., train_cleaned[,-which(names(train_cleaned) == "ID")])) # Chi-squared computation
+weights$feature <- rownames(weights)
+weights[order(weights$attr_importance, decreasing = TRUE),] # Order the features by their weights
+chi_squared_features <- weights$feature[weights$attr_importance > 0.1]
+
+```
+### Evaluation Chi-Square Round 1
+Here we valuate the impact of the feature selection through the validation set. We use the chi-squared-filtered training set into the linear model.
+
+
+```{r Chi-Squared Regression, warning=FALSE}
+chi_squared.lm.mod <- train(Absenteeism ~ ., data = train_cleaned[append(chi_squared_features, "Absenteeism")], 
+               method = "glm", 
+               metric = "Accuracy",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+
+chi_squared.lm.mod.pred <- predict(chi_squared.lm.mod, validation_cleaned[,-!names(validation_cleaned) %in% c("Absenteeism", "ID")])
+
+cm <- confusionMatrix(chi_squared.lm.mod.pred, validation_cleaned$Absenteeism, positive = "0")
+print(cm)
+plot(varImp(chi_squared.lm.mod),top= 20, main = "20 most important features")
+
+```
+From the Chi- square variable importance we can see that the variable we binned for **transportation expense** and **Distance from residence to work** has more importance than the original variable. Thus, we can avoid high correlation by removing the original vairables and run Chi Square again.
+
+##Chi-Square Test Round 2
+
+Under this section we are going to remove the variable mentioned above from the cleaned in both the train and test. Then Run the validation split again.
+
+ **Round 2 - Train and Test Update**
+```{r Amending Data Split Train and Test - Second Round}
+abs_dataset$Transportation.expense<-NULL
+abs_dataset$Distance.from.Residence.to.Work<-NULL
+abs_dataset$Service.time<- NULL
+
+
+
+
+
+training2 <- abs_dataset[1:593,]  
+test2 <- abs_dataset[594:740,]
+
+#Second Training Set
+train_size<- floor(0.76 * nrow(training1))
+
+set.seed(123)
+train_clean.2 <- sample(seq_len(nrow(training2)), size = train_size)
+
+train_cleaned2 <- training2[train_clean.2, ]
+validation_cleaned2<- training2[-train_clean.2, ]
+
+```
+
+Now we will run the Chi-Square Test again with new Training and validation dataset.
+```{r Chi Square Variable ImportanceII}
+library(FSelector)
+
+weights<- data.frame(chi.squared(Absenteeism~., train_cleaned2[,names(train_cleaned2) != "ID"])) # Chi-squared computation
+weights$feature <- rownames(weights)
+weights[order(weights$attr_importance, decreasing = TRUE),] # Order the features by their weights
+chi_squared_features <- weights$feature[weights$attr_importance > 0.1]
+
+```
+### Evaluation Chi-Square Round 2
+
+```{r Chi-Squared Regression II, warning=FALSE}
+chi_squared.lm.mod <- train(Absenteeism ~ ., data = train_cleaned2[append(chi_squared_features, "Absenteeism")], 
+               method = "glm", 
+               metric = "Accuracy",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+
+chi_squared.lm.mod.pred <- predict(chi_squared.lm.mod, validation_cleaned2[,!names(validation_cleaned2) %in% c("Absenteeism", "ID")])
+
+cm <- confusionMatrix(chi_squared.lm.mod.pred, validation_cleaned2$Absenteeism, positive = "0")
+print(cm)
+plot(varImp(chi_squared.lm.mod),top= 20, main = "20 most important features")
+
+```
+
+## Information Gain Selection
+
+We will try now to use another feature selection method and see if it has improved accuracy.
+```{r Information Gain}
+weights<- data.frame(information.gain(Absenteeism~., train_cleaned[,names(train_cleaned) != "ID"]))
+weights$feature <- rownames(weights)
+weights[order(weights$attr_importance, decreasing = TRUE),]
+information_gain_features <- weights$feature[weights$attr_importance > 0.015]
+```
+
+##### Evaluation Information Gain
+
+Let's experiment now with Information Gain Selection. Making use of the `FSelector` package (or other you choice), rank the features according to their Information Gain and filter those which you consider, according to the IG value.
+
+```{r Information Gain Variable Importance I}
+weights<- data.frame(information.gain(Absenteeism~., train_cleaned[,names(train_cleaned) != "ID"]))
+weights$feature <- rownames(weights)
+weights[order(weights$attr_importance, decreasing = TRUE),]
+information_gain_features <- weights$feature[weights$attr_importance > 0.015]
+
+```
+
+##### Information Gain Evaluation I
+Evaluate the impact of the IG selection in the model performance using validation set.
+```{r Information Gain Regression Model I}
+
+ig.lm.mod <- train(Absenteeism ~ ., data = train_cleaned[append(information_gain_features, "Absenteeism")],
+               method = "glm", 
+               metric = "Accuracy",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+
+ig.lm.mod.pred <- predict(ig.lm.mod, validation_cleaned[,-which(names(validation_cleaned) == "Absenteeism")])
+
+cm <- confusionMatrix(ig.lm.mod.pred, validation_cleaned$Absenteeism, positive = "0")
+print(cm)
+
+plot(varImp(ig.lm.mod),top= 20, main = "20 most important features")
+
+```
+There is no improvment in accuracy of this feature selector than the chi-squared.
+
+##### Evaluation Information Gain - With Second II
+
+We will try this again the second time with the train_cleaned2 again.
+
+```{r Information Gain Variable Importance II}
+weights<- data.frame(information.gain(Absenteeism~., train_cleaned2[,names(train_cleaned2) != "ID"]))
+weights$feature <- rownames(weights)
+weights[order(weights$attr_importance, decreasing = TRUE),]
+information_gain_features <- weights$feature[weights$attr_importance > 0.015]
+
+```
+
+##### Information Gain Evaluation - For Second Train Set
+Evaluate the impact of the IG selection in the model performance
+```{r Information Gain Regression Model  II}
+
+ig.lm.mod <- train(Absenteeism ~ ., data = train_cleaned2[append(information_gain_features, "Absenteeism")],
+               method = "glm", 
+               metric = "Accuracy",
+               preProc = c("center", "scale"),
+               trControl=train_control_config)
+
+
+ig.lm.mod.pred <- predict(ig.lm.mod, validation_cleaned2[,-which(names(validation_cleaned2) == "Absenteeism")])
+
+cm <- confusionMatrix(ig.lm.mod.pred, validation_cleaned2$Absenteeism, positive = "0")
+print(cm)
+
+plot(varImp(ig.lm.mod),top= 20, main = "20 most important features")
+
+```
+Following the second round again the accuracy didn't show any improvments.
+
+
+## Chi Square Vs Information Gain Selection
+As Chi-Square feature selector performed relatively better with 
+
+```{r Chi-Square Selection}
+## Chi Vs Info
+chi_training <- train_cleaned[append(chi_squared_features, "Absenteeism")]
+chi_validation <- validation_cleaned[append(chi_squared_features, "Absenteeism")]
+
+
+chi_training2 <- train_cleaned2[append(chi_squared_features, "Absenteeism")]
+chi_validation2 <- validation_cleaned2[append(chi_squared_features, "Absenteeism")]
+
+```
+
+
+
+## Wrapper Method 
+
+Wrapper methods consider the selection of a set of features as a search problem, where different combinations are prepared, evaluated and compared to other combinations. A predictive model us used to evaluate a combination of features and assign a score based on model accuracy. We will use forward and backward stepwise method to improve our features.
+
+
+#### Backward Stepwise
+
+Now, it is time to select what is the best possible compromise between the number of predictors and the results obtained.
+Firstly, we try backward stepwise.
+
+We got error "At least one of the class levels is not a valid R variable name;" so we change the levels for target variable.
+```{r Change Target Variable }
+library(caret)
+levels(train_cleaned$Absenteeism)[levels(train_cleaned$Absenteeism)=="0"]<- "Not_Absent"
+levels(train_cleaned$Absenteeism)[levels(train_cleaned$Absenteeism)=="1"]<- "Absent"
+
+levels(validation_cleaned$Absenteeism)[levels(validation_cleaned$Absenteeism)=="0"]<- "Not_Absent"
+levels(validation_cleaned$Absenteeism)[levels(validation_cleaned$Absenteeism)=="1"]<- "Absent"
+
+
+
+levels(train_cleaned2$Absenteeism)[levels(train_cleaned2$Absenteeism)=="0"]<- "Not_Absent"
+levels(train_cleaned2$Absenteeism)[levels(train_cleaned$Absenteeism)=="1"]<- "Absent"
+
+levels(validation_cleaned2$Absenteeism)[levels(validation_cleaned2$Absenteeism)=="0"]<- "Not_Absent"
+levels(validation_cleaned2$Absenteeism)[levels(validation_cleaned2$Absenteeism)=="1"]<- "Absent"
+
+
+
+levels(chi_training$Absenteeism)[levels(chi_training$Absenteeism)=="0"]<- "Not_Absent"
+levels(chi_training$Absenteeism)[levels(chi_training$Absenteeism)=="1"]<- "Absent"
+
+levels(chi_validation$Absenteeism)[levels(chi_validation$Absenteeism)=="0"]<- "Not_Absent"
+levels(chi_validation$Absenteeism)[levels(chi_validation$Absenteeism)=="1"]<- "Absent"
+
+```
+
+
+**NOTE THE FOLLOWING BACKWARD STEPWISE CODE TAKES LONG TO LOAD**
+
+```{r Backward Stepwise}
+
+train_control_config_4_stepwise <- trainControl(method = "none", classProbs = TRUE)
+
+backward.lm.mod <- train(Absenteeism ~ ., data = train_cleaned[,names(train_cleaned) != "ID"], 
+               method = "glmStepAIC", 
+               direction = "backward",
+               trace = FALSE,
+               metric = "Accuracy",
+               trControl=train_control_config_4_stepwise)
+```
+
+Viewing the selected features by information feature algorithm.
+
+```{r Selected Backward Features}
+paste("Features Selected" ,backward.lm.mod$finalModel$formula[3])
+```
+
+Evaluate the selected model
+
+```{r Backward Evaluation}
+backward.lm.mod.pred <- predict(backward.lm.mod, validation_cleaned[,-which(names(validation_cleaned) == "Absenteeism")])
+
+cm <- confusionMatrix(backward.lm.mod.pred, validation_cleaned$Absenteeism, positive = "Not_Absent")
+print(cm)
+```
+
+This model didn't improve the performance of our lm.mod model. Below we will try this algorithm on the just the selected attributes of chi-square instead of the whole train data set and see if there is any improvment. 
+
+```{r Backward Stepwise on Chi-square selected features, Warning= FALSE}
+
+train_control_config_4_stepwise <- trainControl(method = "none", classProbs = TRUE)
+
+backward.lm.mod <- train(Absenteeism ~ ., data = chi_training[,names(chi_training) != "ID"], 
+               method = "glmStepAIC", 
+               direction = "backward",
+               trace = FALSE,
+               metric = "Accuracy",
+               trControl=train_control_config_4_stepwise)
+paste("Features Selected" ,backward.lm.mod$finalModel$formula[3])
+
+
+```
+
+```{r Backward Evaluation Chi-square attributes}
+backward.lm.mod.pred <- predict(backward.lm.mod, chi_validation[,-which(names(chi_validation) == "Absenteeism")])
+
+cm <- confusionMatrix(backward.lm.mod.pred, chi_validation$Absenteeism, positive = "Not_Absent")
+print(cm)
+```
+
+No improved accuracy with the backward stepwise. 
+
+
+#### Forward Stepwise
+
+Getting errors with unexpected value. Suspecting that this error is coming from variables that have numeric values. 
+
+```{r Forward Stepwise}
+
+
+#train_control_config_4_stepwise <- trainControl(method = "none", classProbs = TRUE, allowParallel = TRUE)
+
+#forward.lm.mod <- train(Absenteeism ~ ., data = chi_training, 
+                                      # method = "glmStepAIC", 
+                                       #direction = "forward",
+                                       #trace=FALSE,
+                                       #metric = "Accuracy",
+                                       #trControl=train_control_config_4_stepwise)
+
+```
+
+```{r Selected Forward Features}
+#paste("Features Selected" ,forward.lm.mod$finalModel$formula[3])
+
+```
+
+```{r Forward Evaluation}
+
+#forward.lm.mod.pred <- predict(forward.lm.mod, chi_validation[,-which(names(chi_validation) == "Absenteeism")])
+
+#cm <- confusionMatrix(forward.lm.mod.pred, chi_validation$Absenteeism, positive = "Not_Absent")
+#print(cm)
+```
+
+This process is not able to further improve our feautre. So, we will take the chi_training.
+
+
+### Ridge 
+Select the best lambda form the CV model, use it to predict the target value of the validation set and evaluate the results.
+We decided to use the second chi-square features as they performed slightly better. This is where we used the second set of train and test dataset. 
+
+```{r Ridge Regression I}
+lambdas <- 10^seq(-2, 1, by = .1)
+
+ridge.mod <- train(Absenteeism ~ ., data = chi_training2[,names(chi_training2) != "ID"], 
+               method = "glmnet", 
+               metric = "Accuracy",
+               tuneGrid = expand.grid(alpha = 0, lambda = lambdas))
+
+plot(ridge.mod$finalModel, xvar = "lambda")
+```
+
+
+
+
+```{r Ridge Prediction I}
+
+bestlam <- ridge.mod$bestTune['lambda']
+paste("Best Lambda value from CV=", bestlam)
+ridge.pred= predict(ridge.mod, s=bestlam, chi_validation2[,-which(names(chi_validation2) == "Absenteeism")])
+cm <- confusionMatrix(ridge.pred, chi_validation2$Absenteeism, positive = "0")
+print(cm)
+```
+This has slightly improved our accuracy.
+
+
+### Lasso Regresion
+Lasso remove unimportant features by setting their coefficient to zero and at the end we will check the accuracy of this model on validation dataset and the list of variable that were given coefficients higher than zero.
+
+
+```{r Lasso Regression}
+
+lasso.mod <- train(Absenteeism ~ ., data = chi_training2[, names(chi_training2) != "ID"], 
+               method = "glmnet", 
+               metric = "Accuracy",
+               tuneGrid = expand.grid(alpha = 1, lambda = lambdas))
+```
+
+#### Evaluation
+Plotting the different lambda values.
+```{r Lasso Evaluation}
+plot(lasso.mod$finalModel, xvar="lambda")
+```
+
+```{r Lasso Prediction}
+bestlam <- lasso.mod$bestTune['lambda']
+paste("Best Lambda value from CV=", bestlam)
+lasso.pred= predict(lasso.mod, s=bestlam, chi_validation2[,-which(names(chi_validation2) == "Absenteeism")])
+cm <- confusionMatrix(lasso.pred, chi_validation2$Absenteeism, positive = "0")
+print(cm)
+```
+
+Lasso is able to improve the results achieved by the second chi-square selection by focusing only on a small subset of representative features by removing the effect of less representative features. 
+
+Take a look to the features selected by the lasso model (only those with importance larger than 0)
+```{r Lasso - Variable Importance}
+
+# Print, plot variable importance
+imp <- varImp(lasso.mod$finalModel)
+names <- rownames(imp)[order(imp$Overall, decreasing=TRUE)]
+importance <- imp[names,]
+
+filter(data.frame(names, importance), importance > 0.0)
+```
+
+As we can see that, both the accuracy and the value of R-square for our model has been increased. Therefore, lasso model and ridge are predicting better than the baseline linear model.
+
+In Lasso those who will not be absent from work for long days are mis-categorized as they would (Sensitivity : 0.8387, Specificity : 0.8200) compared to Ridge where specificy is low (Sensitivity : 0.8495, Specificity : 0.8000). In other words, there is a slightly higher true negative rate or Specificity. 
+For our objective, the main aim is to predict "Absense" thus we need more True Negative accuracy. 
+
+## Final Model - Lasso Regression
+
+
+```{r Lasso Regression Full Dataset Train}
+full_traindataset<-rbind(chi_training2,chi_validation2)
+
+lasso.mod_final <- train(Absenteeism ~ ., data = full_traindataset[, names(full_traindataset) != "ID"], 
+               method = "glmnet", 
+               metric = "Accuracy",
+               tuneGrid = expand.grid(alpha = 1, lambda = lambdas))
+```
+
+
+
+
+```{r Lasso Prediction Actual Test}
+bestlam <- lasso.mod$bestTune['lambda']
+paste("Best Lambda value from CV=", bestlam)
+lasso.pred_test2= predict(lasso.mod_final, s=bestlam, test2[,-which(names(test2) == "Absenteeism")])
+test2$Absenteeism<-lasso.pred_test2
+View(test2[, names(test2) %in% c("Absenteeism", "ID")])
+lasso.pred_test2
+
+predicted_data<-test2[, names(test2) %in% c("Absenteeism", "ID")]
+
+```
+write.csv(predicted_data, file = "predictions_lass.csv", row.names = TRUE, col.names=TRUE, dec = ".", sep = ";") 
+
+# Constraind and Recommendation
+In both the Stepwise Backward and Forward, we ran into errors with regards to the names of the values. Values names that start with integers or that contain space characters were giving errors, which we had to change. The Stepwise Backward is left commented, as it was still giving errors for "unexpected characters". Additional research have uncovered that this could be an issue with the Caret package. We recommend making a function that makes all the necessary changes to these values, but it was difficult to implement, especially because we had to change the levels of the factors, and changing them manually is too time consuming.
+
+# Conclusion
+In conclusion, after running our linear regression, Ridge and Lasso, we were able establish that Lasso gives us the best performance for predicting absenteeism, with 83% accuracy and the highest specifity rate among the three regression models (in our specific problem, we believe that accurately predicting the true negatives was more important than the true positives). 
+
+We first got to the conclusion by performing some data cleaning, where we checked the distribution for numerical variables through boxplots and detected outliers, and binning the variables accordingly. Those were performed on both the train and test datasets.
+
+We then split our training test further into training and validation to evaluate our models. After running our baseline models, we further proceeded with removing the variables that were not significant. This didn´t improve significantly our model, albeit this allowed us to spot the most significant version of the variable at hand, since our model included both the binned and unbinned versions of the same variable.
+
+We then ran Chi Sqaure test with our new dataset to determine the most determinant variable, which we then used in Ridge and Lasso regression. However, the additional data manipulation steps did not improve much our accuracy. 
+
+Note that we attempted to run a Random Forest, but our data manipulations were not suitable for this specific model, as decision trees are highly affected by the ranking of the categorical variables, especially that not all of them are ordinal.
+
